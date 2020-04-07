@@ -1,17 +1,7 @@
 %%Model of the Italian Economy (2010s)
 clear all
 clc
-Parallel=1 %GPU
-
-% A few lines needed for running on the Server
-%addpath(genpath('./MatlabToolkits/'))
-%addpath(genpath('../MatlabToolkits/'))
-%try % Server has 20 cores, but is shared with other users, so use max of 16.
-%    parpool(16)
-%    gpuDevice(1)
-%catch % Desktop has less than 8, so will give error, on desktop it is fine to use all available cores.
-%    parpool
-%end
+Parallel=1 %uses CPU. Setting this = 2 would run the code on GPU, making it sensibly faster. 
 PoolDetails=gcp;
 NCores=PoolDetails.NumWorkers
 
@@ -19,7 +9,7 @@ NCores=PoolDetails.NumWorkers
 vfoptions.tolerance=10^(-4);
 vfoptions.polindorval=1;
 vfoptions.howards=80;
-vfoptions.parallel=1;
+vfoptions.parallel=Parallel;
 vfoptions.verbose=1;
 vfoptions.returnmatrix=0;
 vfoptions.exoticpreferences=0;
@@ -27,20 +17,19 @@ vfoptions.forceintegertype=0;
 vfoptions.lowmemory=0;
 vfoptions.phiaprimematrix=0;
 
-tauchenoptions.parallel=0;
+tauchenoptions.parallel=Parallel;
 
 mcmomentsoptions.T=10^6;
 mcmomentsoptions.Tolerance=10^(-5);
 mcmomentsoptions.parallel=tauchenoptions.parallel;
 
 simoptions.burnin=10^4;
-simoptions.simperiods=10^5; % For an accurate solution you will either need simperiod=10^5 and iterate=1, or simperiod=10^6 (iterate=0).
-simoptions.iterate=1;
-simoptions.parallel=1; %Use CPU
+simoptions.simperiods=10^5; 
+simoptions.parallel=Parallel;
 simoptions.verbose=1;
 
 transpathoptions.tolerance=10^(-5);
-transpathoptions.parallel=1;
+transpathoptions.parallel=Parallel;
 transpathoptions.exoticpreferences=0;
 transpathoptions.oldpathweight=0.9;
 transpathoptions.weightscheme=1;
@@ -50,30 +39,38 @@ transpathoptions.verbose=1;
 heteroagentoptions.verbose=1;
 
 SkipGE=0 % Just a placeholder I am using to work on codes without rerunning the GE step.
-
+more_hours=0 % Set this to 1 to run the version of the model with 'more hours'
+alternative_preferences=0 % Set this to 1 to run the version of the model with the parameters
+                          % of the curvature of leisure and consumption used by Castaneda et al. (2003) 
 %% Set some basic variables
 SkipGE=1
 n_l=21;
 n_r=551; % Two General Eqm variables: interest rate r, tax rate a3.
 n_a3=21; %parameter 'a3', only used if trying to find GE on grid
-% Note: d1 is l (labour supply), d2 is a (assets)
+% Note: d1 is l (labour supply), d2 is k (capital assets)
 
 % Some Toolkit options
 simoptions.ncores=NCores; % Number of CPU cores
 
-
-
 %% Parameters
-if SkipGE==0
 Params.J=5; %Number of components of the state space
 
-% From Table 3
+% From Table 11
 % Parameters
 Params.beta=0.904; % Time discount factor
-Params.sigma1=5.915; % Curvature of consumption
-Params.sigma2=8.988; % Curvature of leisure
+if alternative_preferences == 1
+    Params.sigma1=1.5;
+    Params.sigma2=1.01;
+else
+    Params.sigma1=5.915; % Curvature of consumption
+    Params.sigma2=8.988; % Curvature of leisure (I use csi for this in the dissertation)
+end
 Params.chi=0.65; % Relative share of consumption and leisure
-Params.elle=6.4; % Productive time %NOT YET DECIDED
+if more_hours == 1
+   Params.elle=6.4;
+else
+   Params.elle=3.2; % Productive time 
+end
 % Age and employment process
 Params.mu_r=0.028; % Common probability of retiring
 Params.mu_d=0.051; % 1 - mu_d = Common probability of dying
@@ -90,20 +87,14 @@ Params.e5=6.212;
 % Government Policy
 Params.G=0.326; % Government expenditures % Note: G is not really a 'parameter', it is determined residually so as to balance the government budget balance which is a 'market clearance' condition
 Params.omega=0.795; % Normalized transfers to retirees
-Params.a0=1.153; % Income tax function parameters 1 of 4 % DONE
-Params.a1=0.215; % Income tax function parameters 2 of 4 %DONE
-%YET TO DO
-Params.a2=0.1; % Income tax function parameters 3 of 4 % TO DO
-Params.a3=0.1; % Income tax function parameters 4 of 4 % TO DO
-Params.zlowerbar=5.89; % Estate tax function parameter: tax exempt level %DOne (bit funky derivation from value average first house)
+Params.a0=1.153; % Income tax function parameters 1 of 4 
+Params.a1=0.215; % Income tax function parameters 2 of 4
+Params.a2=0.1; % Income tax function parameters 3 of 4 
+Params.a3=0.1; % Income tax function parameters 4 of 4 
+Params.zlowerbar=5.89; % Estate tax function parameter: tax exempt level (bit funky derivation from value of the average first house)
 Params.tauE=0.065; % Estate tax function parameter: marginal tax rate %IMU
 
-  save F:\Modelling\CPU_Italy_Model\Parameters_10Hours Params
-else
-  load F:\Modelling\CPU_Italy_Model\Parameters_Actual Params
-end
-
-  %% Transition Matrix
+  %% Builds the Transition Matrix
 % WW (working to working)
 tauchenoptions.parallel=0;
 
@@ -113,7 +104,7 @@ sigmasq=0.040; %standard deviation
 
 znum=5; %used to divide the earnings distribution in quintiles
 q=3;
-%use the method developed by Tauchen by applying the instruments developed
+%uses the method developed by Tauchen by applying the instruments developed
 %by Kirby for his toolkit
 [z_grid,pi_z]=TauchenMethod(mu,sigmasq,rho,znum,q,tauchenoptions);
 
@@ -123,7 +114,7 @@ C(1,1:5)=mu_r;
 WR=diag(C); %obtain diagonal matrix
 pi_z(:,6:10)=WR;
 
-% Correcting WW 
+% Correcting WW: scales down the probabilities to account for the possibility of retirement
  pi_z(1:5,1:5)=arrayfun(@(x) x/(1/(1-mu_r)),pi_z(1:5,1:5));
 
 % RW (Retirement to Working)
@@ -139,22 +130,21 @@ t=3;
 %earning of the parents and those of the kids
 [f_grid,pi_f]=TauchenMethod(mu1,sigmasq1,rho1,fnum,t,tauchenoptions);
 
-a=dtmc(pi_f);
-h=asymptotics(a)
-% 
-pi_f=arrayfun(@(x) x/(1/0.051), pi_f);
-pi_z(6:10,1:5)=pi_f;
- 
 % RR (retirement to retirement) 
 mu_d=0.051; %probability of dying. Average time in retirement is 19.8 years
 B(1,1:5)=(1-mu_d); %this is the probability of not-dying
 RR=diag(B); 
 pi_z(6:10,6:10)=RR;
 
+%Correcting RW: scales down the transition probabilities to allow for the possibility of survival 
+pi_f=arrayfun(@(x) x/(1/0.051), pi_f);
+pi_z(6:10,1:5)=pi_f;
+
 disp (pi_z);
+
 %% Create the grids
 
-%[e_grid,Gamma,gammastar,gammastarfull]=CastanedaDiazGimenezRiosRull2003_Create_Exog_Shock(Params);
+% Grid of the skill endowment, as derived in Section 5.8
 e_grid=[Params.e1 Params.e2 Params.e3 Params.e4 Params.e5 0 0 0 0 0]
 l_grid=linspace(0,Params.elle,n_l)';
 
@@ -166,18 +156,16 @@ else
     k_grid=[0:0.03:1,1.05:0.08:2,2.1:0.2:10,10.5:0.8:100,104:6:1500]';
 end    
 n_k=length(k_grid);
-% The next lines gives the values they used
-% k_grid=[0:0.02:1,1.05:0.05:2,2.1:0.1:10,10.5:0.5:100,104:4:1500]';
 
-% Bring model into the notational conventions used by the toolkit
-d_grid=[l_grid; k_grid]; % Is a 'Case 2' value function problem
-a_grid=k_grid;
+% Brings the model into the notational conventions used by the VFI toolkit
+d_grid=[l_grid; k_grid]; % Decision variables: it's a 'Case 2' value function problem (see guide to the toolkit)
+a_grid=k_grid; %endowment not governed by transition matrix
 z_grid=linspace(1,2*Params.J,2*Params.J)'; %(age (& determines retirement))
 pi_z=pi_z;
 
-r_grid=linspace(0,1/Params.beta-1,n_r)';
-a3_grid=linspace(0.9*Params.a3,1.1*Params.a3,n_a3)';
-p_grid=[r_grid; a3_grid];
+r_grid=linspace(0,1/Params.beta-1,n_r)'; %interest rate
+a3_grid=linspace(0.9*Params.a3,1.1*Params.a3,n_a3)'; %component of tax policy
+p_grid=[r_grid; a3_grid]; %equilibrium prices put together
 
 n_d=[n_l,n_k];
 n_a=n_k;
@@ -191,37 +179,36 @@ n_z
 n_p
 
 %% Set up the model itself
-GEPriceParamNames={'r','a3'};
+GEPriceParamNames={'r','a3'}; %2 equilibrium prices
 
 DiscountFactorParamNames={'beta'};
 
+%This is the function that determines the utility enjoyed by agents. Please, see the relative script for the details.
 ReturnFn=@(d1_val, d2_val, a_val, z_val,r,sigma1,sigma2,chi,elle,theta,delta,e1,e2,e3,e4,e5,omega,a0,a1,a2,a3) CPU_Italy_Model_ReturnFn(d1_val, d2_val, a_val, z_val,r,sigma1,sigma2,chi,elle,theta,delta,e1,e2,e3,e4,e5,omega,a0,a1,a2,a3);
-ReturnFnParamNames={'r','sigma1','sigma2','chi','elle','theta','delta','e1','e2','e3','e4','e5','omega','a0','a1','a2','a3'}; %It is important that these are in same order as they appear in 'CastanedaDiazGimenezRiosRull2003_ReturnFn'
+ReturnFnParamNames={'r','sigma1','sigma2','chi','elle','theta','delta','e1','e2','e3','e4','e5','omega','a0','a1','a2','a3'};
 
-% Case 2 requires 'phiaprime' which determines next periods assets from
-% this periods decisions.
+% Case 2 requires 'phiaprime' which determines next periods assets from this periods decisions. 
+%This determines the law of motion of the macroeconomic aggregates 
 Case2_Type=2;
 vfoptions.phiaprimematrix=1;
 PhiaprimeParamNames={};
 Phi_aprimeMatrix=CPU_Italy_Model_PhiaprimeMatrix(n_d,n_z,k_grid,Params.J,Params.zlowerbar,Params.tauE);
 
-% Create descriptions of SS values as functions of d_grid, a_grid, s_grid & pi_s (used to calculate the integral across the SS dist fn of whatever
-%     functions you define here)
+% Creates descriptions of the steady-state values as functions of d_grid, a_grid, z_grid & pi_z 
 FnsToEvaluateParamNames(1).Names={};
-FnsToEvaluateFn_1 = @(d1_val,d2_val,a_val,s_val) a_val; %K
+FnsToEvaluateFn_1 = @(d1_val,d2_val,a_val,s_val) a_val; %Capital K
 FnsToEvaluateParamNames(2).Names={'e1','e2','e3','e4','e5'};
 FnsToEvaluateFn_2 = @(d1_val,d2_val,a_val,s_val,e1,e2,e3,e4,e5) d1_val*(e1*(s_val==1)+e2*(s_val==2)+e3*(s_val==3)+e4*(s_val==4)+e5*(s_val==5)); % Efficiency hours worked: L
-FnsToEvaluateParamNames(3).Names={'J','r','theta','delta','omega','e1','e2','e3','e4','e5','a0','a1','a2','a3'};
+FnsToEvaluateParamNames(3).Names={'J','r','theta','delta','omega','e1','e2','e3','e4','e5','a0','a1','a2','a3'}; %Revenue derived from INcome taxes. The function defines the tax program to which incomes are subjected
 FnsToEvaluateFn_IncomeTaxRevenue = @(d1_val,d2_val,a_val,s_val,J,r,theta,delta,omega,e1,e2,e3,e4,e5,a0,a1,a2,a3) CPU_Italy_Model_IncomeTaxRevenueFn(d1_val,d2_val,a_val,s_val,J,r,theta,delta,omega,e1,e2,e3,e4,e5,a0,a1,a2,a3);
 FnsToEvaluateParamNames(4).Names={'J','omega'};
 FnsToEvaluateFn_Pensions = @(d1_val,d2_val,a_val,s_val,J,omega) omega*(s_val>J); % If you are retired you earn pension omega (otherwise it is zero).
-FnsToEvaluateParamNames(5).Names={'J','mu_d','zlowerbar','tauE'};
-FnsToEvaluateFn_EstateTaxRev  = @(d1_val,d2_val,a_val,s_val,J,mu_d,zlowerbar,tauE) (s_val>J)*(1-mu_d)*tauE*max(d2_val-zlowerbar,0); % If you are retired: the probability of dying times the estate tax you would pay
+FnsToEvaluateParamNames(5).Names={'J','mu_d','zlowerbar','tauE'}; %Determines the property tax revenue
+FnsToEvaluateFn_EstateTaxRev  = @(d1_val,d2_val,a_val,s_val,J,mu_d,zlowerbar,tauE) (s_val>J)*(1-mu_d)*tauE*max(d2_val-zlowerbar,0); 
+%Finally, all the equilibrium conditions are aggregated
 FnsToEvaluate={FnsToEvaluateFn_1,FnsToEvaluateFn_2,FnsToEvaluateFn_IncomeTaxRevenue,FnsToEvaluateFn_Pensions,FnsToEvaluateFn_EstateTaxRev};
 
-% Now define the functions for the General Equilibrium conditions
-%     Should be written so that closer the value given by the function is to zero, the closer the general eqm condition is to being met.
-% GeneralEqmParamNames: the names of the parameters/prices that are being determined in general equilibrium
+% Defines the functions for the General Equilibrium conditions: the closer the value given by the function is to zero, the closer the general eqm condition is to being met.
 % GeneralEqmEqnParamNames: the names of parameters that are needed to evaluate the GeneralEqmEqns (these parameters themselves are not
 %     determined as part of general eqm)
 % GeneralEqmEqns: the general equilibrium equations. These typically include Market Clearance condtions, but often also things such as
@@ -241,34 +228,34 @@ GeneralEqmEqns={GeneralEqmEqn_1,GeneralEqmEqn_2};
 % vfoptions.policy_forceintegertype=1
 % [V, Policy]=ValueFnIter_Case2(V0, n_d, n_a, n_z, d_grid, a_grid, z_grid, pi_z, Phi_aprimeMatrix, Case2_Type, ReturnFn, Params, DiscountFactorParamNames, ReturnFnParamNames, PhiaprimeParamNames, vfoptions);
 % StationaryDist=StationaryDist_Case2(Policy,Phi_aprimeMatrix,Case2_Type,n_d,n_a,n_z,pi_z,simoptions);
-% %save \\homeblue01\hmbb55\DUDE\Desktop\Modelling\Experiments\Actual_lessK V Policy StationaryDist
 
 %% Solve the baseline model
 
 if SkipGE==0
     % Find the competitive equilibrium
 %     heteroagentoptions.pgrid=p_grid;
-    Params.r=0.0233; %Params.a3
+    Params.r=0.0233; %Extrapolated from the hypothetical steady state conditions of the Italian economy in the Ã²ast decade
     heteroagentoptions.verbose=1;
     V0=zeros(n_a,n_z);
-%     [p_eqm,p_eqm_index,MarketClearance]=HeteroAgentStationaryEqm_Case2(V0, n_d, n_a, n_z, n_p, pi_z, d_grid, a_grid, z_grid,Phi_aprimeMatrix, Case2_Type, ReturnFn, FnsToEvaluateFn, GeneralEqmEqns, Params, DiscountFactorParamNames, ReturnFnParamNames, PhiaprimeParamNames, FnsToEvaluateParamNames, GeneralEqmEqnParamNames, GEPriceParamNames,heteroagentoptions, simoptions, vfoptions);
     [p_eqm,p_eqm_index,MarketClearance]=HeteroAgentStationaryEqm_Case2(V0, n_d, n_a, n_z, 0, pi_z, d_grid, a_grid, z_grid,Phi_aprimeMatrix, Case2_Type, ReturnFn, FnsToEvaluate, GeneralEqmEqns, Params, DiscountFactorParamNames, ReturnFnParamNames, PhiaprimeParamNames, FnsToEvaluateParamNames, GeneralEqmEqnParamNames, GEPriceParamNames,heteroagentoptions, simoptions, vfoptions);
-%%
     % Evaluate a few objects at the equilibrium
-    Params.r=p_eqm(1);
-    Params.a3=p_eqm(2);
-    Params.w=(1-Params.theta)*(((Params.r+Params.delta)/(Params.theta))^(Params.theta/(Params.theta-1)));
+    Params.r=p_eqm(1); %interest rate
+    Params.a3=p_eqm(2); %3rd tax component
+    Params.w=(1-Params.theta)*(((Params.r+Params.delta)/(Params.theta))^(Params.theta/(Params.theta-1))); %wage rate. Depends on other equilibrium prices
     
     [V, Policy]=ValueFnIter_Case2(V0, n_d, n_a, n_z, d_grid, a_grid, z_grid, pi_z, Phi_aprimeMatrix, Case2_Type, ReturnFn, Params, DiscountFactorParamNames, ReturnFnParamNames, PhiaprimeParamNames, vfoptions);
     
     StationaryDist=StationaryDist_Case2(Policy,Phi_aprimeMatrix,Case2_Type,n_d,n_a,n_z,pi_z,simoptions);
     
-    save F:\Modelling\CPU_Italy_Model\Italy_Model_10Hours.mat p_eqm MarketClearance V Policy a_grid StationaryDist
+%change the save and load options based on need     
+    save \\CPU_Italy_Model\Italy_Model.mat p_eqm MarketClearance V Policy a_grid StationaryDist
 else
-    load F:\Modelling\CPU_Italy_Model\CPU_Italy_Model_Actual.mat p_eqm MarketClearance V Policy a_grid StationaryDist
+    load \\CPU_Italy_Model\CPU_Italy_Model.mat p_eqm MarketClearance V Policy a_grid StationaryDist
 end
+% evaluates steady-state interest rate and wage rate
 Params.r=p_eqm(1);
 Params.w=(1-Params.theta)*(((Params.r+Params.delta)/(Params.theta))^(Params.theta/(Params.theta-1)));
+
 %% Reproduce Tables
 % Tables 3, 4, & 5 simply report the calibrated parameters. 
 % While not really part of replication I reproduce these anyway (combining Tables 4 & 5 into a single table)
@@ -565,7 +552,7 @@ EstimationTargets.CrossSectionalCorrelationOfIncomeBetweenFathersAndSons=0.4;
 Params.a0=0.258;
 Params.a1=0.768;
 EstimationTargets.EffectiveTaxRateOnAverageHHIncome=0.0762;
-% The 'EffectiveTaxRateOnAverageHHIncome' is not reported in Castañeda, Diaz-Gimenez, & Rios-Rull (2003). 
+% The 'EffectiveTaxRateOnAverageHHIncome' is not reported in CastaÃ±eda, Diaz-Gimenez, & Rios-Rull (2003). 
 % The number used here is 
 % According to the 1998 Economic Report of the President, Table B80, revenue from 'Individual Income Taxes' in 1992 was $476 billion.
 % According to the 1998 Economic Report of the President, Table B1, GDP in 1992 was $6244.4 billion
@@ -613,7 +600,7 @@ EstimationTargets.EarningsTopSharesAsFraction=[0.1238,0.1637,0.1476]; % 90-95, 9
 EstimationTargets.WealthTopSharesAsFraction=[0.1262,0.2395,0.2955]; % 90-95, 95-99, 99-100.
 
 % The Pension Function
-% Castañeda, Diaz-Gimenez, & Rio-Rull (2003) do not describe the
+% CastaÃ±eda, Diaz-Gimenez, & Rio-Rull (2003) do not describe the
 % calibration of omega(s). From Table 3 we have that 
 Params.omega=0.8;
 % suggesting the idea was to target the replacement rate.
